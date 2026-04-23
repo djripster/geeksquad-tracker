@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "./supabase";
 
 const MANAGER_PASSWORD = "geeksquad2024";
 const ROLES = ["Consultation Agent", "Repair Agent"];
 
 function getToday() {
   return new Date().toISOString().split("T")[0];
-
 }
 function formatDate(d) {
   return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -19,28 +19,10 @@ function getWeekRange() {
 function getMonthRange() {
   const now = new Date();
   return {
-
     start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0],
     end: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0],
   };
 }
-
-const initialAgents = [
-  { id: 1, name: "Alex", role: "Consultation Agent", active: true },
-  { id: 2, name: "Jordan", role: "Repair Agent", active: true },
-  { id: 3, name: "Morgan", role: "Consultation Agent", active: true },
-  { id: 4, name: "Riley", role: "Repair Agent", active: true },
-  { id: 5, name: "Casey", role: "Consultation Agent", active: true },
-
-  { id: 6, name: "Drew", role: "Repair Agent", active: true },
-];
-
-const initialEntries = [
-  { id: 1, date: getToday(), agent: "Alex", role: "Consultation Agent", memberships: 3, ticketsCreated: 5, ticketsClosed: 0, appleRepairs: 0 },
-  { id: 2, date: getToday(), agent: "Jordan", role: "Repair Agent", memberships: 0, ticketsCreated: 0, ticketsClosed: 7, appleRepairs: 2 },
-  { id: 3, date: getToday(), agent: "Morgan", role: "Consultation Agent", memberships: 2, ticketsCreated: 4, ticketsClosed: 0, appleRepairs: 0 },
-  { id: 4, date: getToday(), agent: "Riley", role: "Repair Agent", memberships: 0, ticketsCreated: 0, ticketsClosed: 5, appleRepairs: 3 },
-];
 
 const CSS = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -75,6 +57,7 @@ const CSS = `
   .form-label { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; display: block; }
   .nav-link { background: none; border: none; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer; padding: 6px 14px; border-radius: 4px; transition: all 0.2s; }
   .success-banner { background: rgba(0,200,100,0.1); border: 1px solid rgba(0,200,100,0.3); color: #00c864; border-radius: 8px; padding: 14px 20px; font-weight: 700; font-size: 14px; letter-spacing: 1px; text-align: center; animation: fadeIn 0.3s ease; }
+  .error-banner { background: rgba(255,50,50,0.1); border: 1px solid rgba(255,50,50,0.3); color: #ff4444; border-radius: 8px; padding: 14px 20px; font-weight: 700; font-size: 14px; letter-spacing: 1px; text-align: center; }
   .dash-tab { background: none; border: none; font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer; padding: 10px 20px; border-bottom: 2px solid transparent; color: var(--muted); transition: all 0.2s; }
   .dash-tab.active { color: var(--orange); border-bottom-color: var(--orange); }
   .dash-tab:hover:not(.active) { color: #fff; }
@@ -83,6 +66,9 @@ const CSS = `
   .agent-row { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; display: flex; align-items: center; gap: 16px; transition: border-color 0.2s; }
   .agent-row:hover { border-color: #3a3a3a; }
   .agent-row.editing { border-color: var(--orange); }
+  .loading { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--muted); font-size: 14px; font-family: 'Barlow', sans-serif; gap: 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--orange); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 `;
@@ -90,14 +76,14 @@ const CSS = `
 export default function App() {
   const [view, setView] = useState("submit");
   const [dashTab, setDashTab] = useState("performance");
-  const [agents, setAgents] = useState(initialAgents);
-  const [nextAgentId, setNextAgentId] = useState(7);
-  const [entries, setEntries] = useState(initialEntries);
-  const [nextId, setNextId] = useState(5);
+  const [agents, setAgents] = useState([]);
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [loginError, setLoginError] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [isManager, setIsManager] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [dashPeriod, setDashPeriod] = useState("daily");
   const [editingAgentId, setEditingAgentId] = useState(null);
   const [editName, setEditName] = useState("");
@@ -113,6 +99,23 @@ export default function App() {
 
   const activeAgents = agents.filter(a => a.active);
 
+  // Load data from Supabase on mount
+  useEffect(() => {
+    loadAgents();
+    loadEntries();
+  }, []);
+
+  async function loadAgents() {
+    const { data, error } = await supabase.from("agents").select("*").order("id");
+    if (!error && data) setAgents(data);
+    setLoading(false);
+  }
+
+  async function loadEntries() {
+    const { data, error } = await supabase.from("entries").select("*").order("created_at", { ascending: false });
+    if (!error && data) setEntries(data);
+  }
+
   function handleFormChange(e) {
     const { name, value } = e.target;
     if (name === "agent") {
@@ -123,17 +126,24 @@ export default function App() {
     }
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!form.agent || !form.role || !form.date) return;
+    setSubmitError("");
     const entry = {
-      id: nextId, date: form.date, agent: form.agent, role: form.role,
+      date: form.date,
+      agent: form.agent,
+      role: form.role,
       memberships: parseInt(form.memberships) || 0,
-      ticketsCreated: parseInt(form.ticketsCreated) || 0,
-      ticketsClosed: parseInt(form.ticketsClosed) || 0,
-      appleRepairs: parseInt(form.appleRepairs) || 0,
+      tickets_created: parseInt(form.ticketsCreated) || 0,
+      tickets_closed: parseInt(form.ticketsClosed) || 0,
+      apple_repairs: parseInt(form.appleRepairs) || 0,
     };
-    setEntries(e => [...e, entry]);
-    setNextId(n => n + 1);
+    const { error } = await supabase.from("entries").insert([entry]);
+    if (error) {
+      setSubmitError("Failed to save entry. Please try again.");
+      return;
+    }
+    await loadEntries();
     setSubmitted(true);
     setTimeout(() => {
       setSubmitted(false);
@@ -155,29 +165,33 @@ export default function App() {
     setEditRole(agent.role);
   }
 
-  function saveEdit(agentId) {
+  async function saveEdit(agentId) {
     if (!editName.trim()) return;
-    const oldName = agents.find(a => a.id === agentId)?.name;
-    setAgents(prev => prev.map(a => a.id === agentId ? { ...a, name: editName.trim(), role: editRole } : a));
-    if (oldName && oldName !== editName.trim()) {
-      setEntries(prev => prev.map(e => e.agent === oldName ? { ...e, agent: editName.trim(), role: editRole } : e));
+    const { error } = await supabase.from("agents").update({ name: editName.trim(), role: editRole }).eq("id", agentId);
+    if (!error) {
+      await loadAgents();
+      setEditingAgentId(null);
+      flashSaved();
     }
-    setEditingAgentId(null);
-    flashSaved();
   }
 
-  function toggleActive(agentId) {
-    setAgents(prev => prev.map(a => a.id === agentId ? { ...a, active: !a.active } : a));
-    flashSaved();
+  async function toggleActive(agentId, currentActive) {
+    const { error } = await supabase.from("agents").update({ active: !currentActive }).eq("id", agentId);
+    if (!error) {
+      await loadAgents();
+      flashSaved();
+    }
   }
 
-  function addAgent() {
+  async function addAgent() {
     if (!newAgentName.trim()) return;
-    setAgents(prev => [...prev, { id: nextAgentId, name: newAgentName.trim(), role: newAgentRole, active: true }]);
-    setNextAgentId(n => n + 1);
-    setNewAgentName("");
-    setNewAgentRole("Consultation Agent");
-    flashSaved();
+    const { error } = await supabase.from("agents").insert([{ name: newAgentName.trim(), role: newAgentRole, active: true }]);
+    if (!error) {
+      await loadAgents();
+      setNewAgentName("");
+      setNewAgentRole("Consultation Agent");
+      flashSaved();
+    }
   }
 
   function flashSaved() {
@@ -197,13 +211,14 @@ export default function App() {
     const stats = {};
     filtered.forEach(e => {
       if (!stats[e.agent]) stats[e.agent] = { agent: e.agent, jobs: 0, memberships: 0, ticketsCreated: 0, ticketsClosed: 0, appleRepairs: 0, role: "" };
-
       stats[e.agent].role = e.role;
-      stats[e.agent].memberships += e.memberships;
-      stats[e.agent].ticketsCreated += e.ticketsCreated;
-      stats[e.agent].ticketsClosed += e.ticketsClosed;
-      stats[e.agent].appleRepairs += e.appleRepairs;
-      stats[e.agent].jobs += e.role === "Consultation Agent" ? e.memberships + e.ticketsCreated : e.ticketsClosed + e.appleRepairs;
+      stats[e.agent].memberships += e.memberships || 0;
+      stats[e.agent].ticketsCreated += e.tickets_created || 0;
+      stats[e.agent].ticketsClosed += e.tickets_closed || 0;
+      stats[e.agent].appleRepairs += e.apple_repairs || 0;
+      stats[e.agent].jobs += e.role === "Consultation Agent"
+        ? (e.memberships || 0) + (e.tickets_created || 0)
+        : (e.tickets_closed || 0) + (e.apple_repairs || 0);
     });
     return Object.values(stats);
   }
@@ -242,7 +257,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 32px" }}>
 
-        {/* ── SUBMIT VIEW ── */}
+        {/* SUBMIT VIEW */}
         {view === "submit" && (
           <div style={{ maxWidth: 560, margin: "0 auto" }}>
             <div style={{ marginBottom: 32 }}>
@@ -250,65 +265,70 @@ export default function App() {
               <p style={{ color: "var(--muted)", fontSize: 15, marginTop: 8, fontFamily: "'Barlow', sans-serif" }}>Submit your daily activity — takes 30 seconds.</p>
             </div>
             {submitted && <div className="success-banner" style={{ marginBottom: 24 }}>✓ Entry submitted successfully!</div>}
-            <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 32, display: "flex", flexDirection: "column", gap: 20 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            {submitError && <div className="error-banner" style={{ marginBottom: 24 }}>{submitError}</div>}
+            {loading ? (
+              <div className="loading"><div className="spinner" /><span>Loading team data...</span></div>
+            ) : (
+              <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 32, display: "flex", flexDirection: "column", gap: 20 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div>
+                    <label className="form-label">Your Name</label>
+                    <select name="agent" value={form.agent} onChange={handleFormChange} className="form-input">
+                      <option value="">Select agent...</option>
+                      {activeAgents.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label">Date</label>
+                    <input type="date" name="date" value={form.date} onChange={handleFormChange} className="form-input" />
+                  </div>
+                </div>
                 <div>
-                  <label className="form-label">Your Name</label>
-                  <select name="agent" value={form.agent} onChange={handleFormChange} className="form-input">
-                    <option value="">Select agent...</option>
-                    {activeAgents.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-                  </select>
+                  <label className="form-label">Role {form.agent && <span style={{ color: "var(--orange)", fontSize: 10 }}>(auto-filled)</span>}</label>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {ROLES.map(r => (
+                      <button key={r} onClick={() => setForm(f => ({ ...f, role: r }))} style={{
+                        flex: 1, padding: "12px 10px", border: `2px solid ${form.role === r ? "var(--orange)" : "var(--border)"}`,
+                        background: form.role === r ? "rgba(255,107,0,0.1)" : "transparent",
+                        color: form.role === r ? "var(--orange)" : "var(--muted)", borderRadius: 6, cursor: "pointer",
+                        fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 13, letterSpacing: 1, transition: "all 0.2s"
+                      }}>{r === "Consultation Agent" ? "🗣 Consultation" : "🔧 Repair"}</button>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <label className="form-label">Date</label>
-                  <input type="date" name="date" value={form.date} onChange={handleFormChange} className="form-input" />
-                </div>
+                {form.role === "Consultation Agent" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, animation: "fadeIn 0.3s ease" }}>
+                    <div>
+                      <label className="form-label">Memberships Sold</label>
+                      <input type="number" name="memberships" value={form.memberships} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
+                    </div>
+                    <div>
+                      <label className="form-label">Tickets Created</label>
+                      <input type="number" name="ticketsCreated" value={form.ticketsCreated} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
+                    </div>
+                  </div>
+                )}
+                {form.role === "Repair Agent" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, animation: "fadeIn 0.3s ease" }}>
+                    <div>
+                      <label className="form-label">Tickets Closed</label>
+                      <input type="number" name="ticketsClosed" value={form.ticketsClosed} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
+                    </div>
+                    <div>
+                      <label className="form-label">Apple Repairs Completed</label>
+                      <input type="number" name="appleRepairs" value={form.appleRepairs} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
+                    </div>
+                  </div>
+                )}
+                <button className="btn-primary" onClick={handleSubmit} disabled={!form.agent || !form.role} style={{ marginTop: 4, opacity: (!form.agent || !form.role) ? 0.4 : 1 }}>
+                  Submit Entry
+                </button>
               </div>
-              <div>
-                <label className="form-label">Role {form.agent && <span style={{ color: "var(--orange)", fontSize: 10 }}>(auto-filled)</span>}</label>
-                <div style={{ display: "flex", gap: 10 }}>
-                  {ROLES.map(r => (
-                    <button key={r} onClick={() => setForm(f => ({ ...f, role: r }))} style={{
-                      flex: 1, padding: "12px 10px", border: `2px solid ${form.role === r ? "var(--orange)" : "var(--border)"}`,
-                      background: form.role === r ? "rgba(255,107,0,0.1)" : "transparent",
-                      color: form.role === r ? "var(--orange)" : "var(--muted)", borderRadius: 6, cursor: "pointer",
-                      fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, fontSize: 13, letterSpacing: 1, transition: "all 0.2s"
-                    }}>{r === "Consultation Agent" ? "🗣 Consultation" : "🔧 Repair"}</button>
-                  ))}
-                </div>
-              </div>
-              {form.role === "Consultation Agent" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, animation: "fadeIn 0.3s ease" }}>
-                  <div>
-                    <label className="form-label">Memberships Sold</label>
-                    <input type="number" name="memberships" value={form.memberships} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
-                  </div>
-                  <div>
-                    <label className="form-label">Tickets Created</label>
-                    <input type="number" name="ticketsCreated" value={form.ticketsCreated} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
-                  </div>
-                </div>
-              )}
-              {form.role === "Repair Agent" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, animation: "fadeIn 0.3s ease" }}>
-                  <div>
-                    <label className="form-label">Tickets Closed</label>
-                    <input type="number" name="ticketsClosed" value={form.ticketsClosed} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
-                  </div>
-                  <div>
-                    <label className="form-label">Apple Repairs Completed</label>
-                    <input type="number" name="appleRepairs" value={form.appleRepairs} onChange={handleFormChange} placeholder="0" min="0" className="form-input" />
-                  </div>
-                </div>
-              )}
-              <button className="btn-primary" onClick={handleSubmit} disabled={!form.agent || !form.role} style={{ marginTop: 4, opacity: (!form.agent || !form.role) ? 0.4 : 1 }}>
-                Submit Entry
-              </button>
-            </div>
+            )}
           </div>
         )}
 
-        {/* ── LOGIN VIEW ── */}
+        {/* LOGIN VIEW */}
         {view === "login" && (
           <div style={{ maxWidth: 420, margin: "60px auto 0" }}>
             <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 40 }}>
@@ -326,12 +346,11 @@ export default function App() {
                 <button className="btn-primary" onClick={handleLogin}>Unlock Dashboard</button>
                 <button className="btn-ghost" onClick={() => setView("submit")}>← Back to Log Work</button>
               </div>
-              <p style={{ color: "var(--muted)", fontSize: 11, textAlign: "center", marginTop: 20, fontFamily: "'Barlow', sans-serif" }}>Demo password: geeksquad2024</p>
             </div>
           </div>
         )}
 
-        {/* ── DASHBOARD VIEW ── */}
+        {/* DASHBOARD VIEW */}
         {view === "dashboard" && isManager && (
           <div>
             <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
@@ -353,7 +372,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Dashboard Tabs */}
             <div style={{ borderBottom: "1px solid var(--border)", marginBottom: 32, display: "flex" }}>
               <button className={`dash-tab ${dashTab === "performance" ? "active" : ""}`} onClick={() => setDashTab("performance")}>📊 Performance</button>
               <button className={`dash-tab ${dashTab === "agents" ? "active" : ""}`} onClick={() => setDashTab("agents")}>
@@ -362,7 +380,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* ── PERFORMANCE TAB ── */}
+            {/* PERFORMANCE TAB */}
             {dashTab === "performance" && (
               <div style={{ animation: "slideIn 0.25s ease" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 32 }}>
@@ -379,6 +397,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+
                 <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", marginBottom: 32 }}>
                   <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontWeight: 800, fontSize: 16, letterSpacing: 1, textTransform: "uppercase" }}>Agent Performance</span>
@@ -397,7 +416,6 @@ export default function App() {
                       </thead>
                       <tbody>
                         {agentStats.sort((a, b) => b.jobs - a.jobs).map((s, i) => {
-
                           const pct = totalJobs > 0 ? Math.round((s.jobs / totalJobs) * 100) : 0;
                           return (
                             <tr key={s.agent} style={{ borderBottom: "1px solid var(--border)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)" }}>
@@ -430,10 +448,11 @@ export default function App() {
                     </table>
                   </div>
                 </div>
+
                 <div>
                   <h3 style={{ fontWeight: 800, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 }}>Recent Submissions</h3>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {[...entries].reverse().slice(0, 8).map(e => (
+                    {entries.slice(0, 8).map(e => (
                       <div key={e.id} style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                           <span style={{ fontWeight: 800, fontSize: 15 }}>{e.agent}</span>
@@ -442,9 +461,9 @@ export default function App() {
                         </div>
                         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                           {e.memberships > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>🏆 {e.memberships} memberships</span>}
-                          {e.ticketsCreated > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>🎫 {e.ticketsCreated} created</span>}
-                          {e.ticketsClosed > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>✅ {e.ticketsClosed} closed</span>}
-                          {e.appleRepairs > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>🍎 {e.appleRepairs} apple</span>}
+                          {e.tickets_created > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>🎫 {e.tickets_created} created</span>}
+                          {e.tickets_closed > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>✅ {e.tickets_closed} closed</span>}
+                          {e.apple_repairs > 0 && <span style={{ fontSize: 12, color: "var(--muted)", fontFamily: "'Barlow', sans-serif" }}>🍎 {e.apple_repairs} apple</span>}
                         </div>
                       </div>
                     ))}
@@ -453,61 +472,62 @@ export default function App() {
               </div>
             )}
 
-            {/* ── MANAGE AGENTS TAB ── */}
+            {/* MANAGE AGENTS TAB */}
             {dashTab === "agents" && (
               <div style={{ animation: "slideIn 0.25s ease" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 40, alignItems: "start" }}>
-
-                  {/* Left: Roster */}
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                       <h3 style={{ fontWeight: 800, fontSize: 16, letterSpacing: 1, textTransform: "uppercase" }}>Team Roster</h3>
                       {agentSaved && <span style={{ color: "#00c864", fontSize: 12, fontWeight: 700, letterSpacing: 1, animation: "fadeIn 0.2s ease" }}>✓ Saved</span>}
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {agents.map(agent => (
-                        <div key={agent.id} className={`agent-row ${editingAgentId === agent.id ? "editing" : ""}`} style={{ opacity: agent.active ? 1 : 0.5 }}>
-                          {editingAgentId === agent.id ? (
-                            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                                <div>
-                                  <label className="form-label" style={{ fontSize: 9 }}>Name</label>
-                                  <input className="form-input-sm" value={editName} onChange={e => setEditName(e.target.value)} onKeyDown={e => e.key === "Enter" && saveEdit(agent.id)} placeholder="Agent name" />
+                    {loading ? (
+                      <div className="loading"><div className="spinner" /><span>Loading...</span></div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {agents.map(agent => (
+                          <div key={agent.id} className={`agent-row ${editingAgentId === agent.id ? "editing" : ""}`} style={{ opacity: agent.active ? 1 : 0.5 }}>
+                            {editingAgentId === agent.id ? (
+                              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                  <div>
+                                    <label className="form-label" style={{ fontSize: 9 }}>Name</label>
+                                    <input className="form-input-sm" value={editName} onChange={e => setEditName(e.target.value)} onKeyDown={e => e.key === "Enter" && saveEdit(agent.id)} placeholder="Agent name" />
+                                  </div>
+                                  <div>
+                                    <label className="form-label" style={{ fontSize: 9 }}>Role</label>
+                                    <select className="form-input-sm" value={editRole} onChange={e => setEditRole(e.target.value)}>
+                                      {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                                    </select>
+                                  </div>
                                 </div>
-                                <div>
-                                  <label className="form-label" style={{ fontSize: 9 }}>Role</label>
-                                  <select className="form-input-sm" value={editRole} onChange={e => setEditRole(e.target.value)}>
-                                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                                  </select>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  <button className="btn-sm success" onClick={() => saveEdit(agent.id)}>✓ Save Changes</button>
+                                  <button className="btn-sm" onClick={() => setEditingAgentId(null)}>Cancel</button>
                                 </div>
                               </div>
-                              <div style={{ display: "flex", gap: 8 }}>
-                                <button className="btn-sm success" onClick={() => saveEdit(agent.id)}>✓ Save Changes</button>
-                                <button className="btn-sm" onClick={() => setEditingAgentId(null)}>Cancel</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 5 }}>{agent.name}</div>
-                                <span className={`pill ${!agent.active ? "pill-inactive" : agent.role === "Consultation Agent" ? "pill-consult" : "pill-repair"}`}>
-                                  {!agent.active ? "Inactive" : agent.role === "Consultation Agent" ? "🗣 Consult" : "🔧 Repair"}
-                                </span>
-                              </div>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <button className="btn-sm" onClick={() => startEdit(agent)} disabled={!agent.active} style={{ opacity: agent.active ? 1 : 0.4 }}>✏ Edit</button>
-                                <button className={`btn-sm ${agent.active ? "danger" : ""}`} onClick={() => toggleActive(agent.id)}>
-                                  {agent.active ? "Deactivate" : "Reactivate"}
-                                </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                            ) : (
+                              <>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 5 }}>{agent.name}</div>
+                                  <span className={`pill ${!agent.active ? "pill-inactive" : agent.role === "Consultation Agent" ? "pill-consult" : "pill-repair"}`}>
+                                    {!agent.active ? "Inactive" : agent.role === "Consultation Agent" ? "🗣 Consult" : "🔧 Repair"}
+                                  </span>
+                                </div>
+                                <div style={{ display: "flex", gap: 6 }}>
+                                  <button className="btn-sm" onClick={() => startEdit(agent)} disabled={!agent.active} style={{ opacity: agent.active ? 1 : 0.4 }}>✏ Edit</button>
+                                  <button className={`btn-sm ${agent.active ? "danger" : ""}`} onClick={() => toggleActive(agent.id, agent.active)}>
+                                    {agent.active ? "Deactivate" : "Reactivate"}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Right: Add Agent + Stats */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
                     <div>
                       <h3 style={{ fontWeight: 800, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 }}>Add New Agent</h3>
@@ -535,7 +555,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Roster Summary */}
                     <div>
                       <h3 style={{ fontWeight: 800, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 }}>Roster Summary</h3>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
